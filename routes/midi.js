@@ -3,6 +3,7 @@ const multer = require('multer');
 const path = require('path');
 const Midi = require('../models/Midi');
 const jwt = require('jsonwebtoken');
+const fs = require('fs');
 
 const router = express.Router();
 
@@ -44,6 +45,15 @@ router.post('/upload', authMiddleware, upload.single('midiFile'), async (req, re
             return res.status(400).json({ message: 'No file uploaded' });
         }
 
+        let parsedTags = [];
+        if (req.body.tags) {
+            try {
+                parsedTags = JSON.parse(req.body.tags);
+            } catch (e) {
+                console.error("Error parsing tags:", e);
+            }
+        }
+
         // Создаем запись в базе данных
         const newMidi = new Midi({
             title: req.body.title,
@@ -51,7 +61,8 @@ router.post('/upload', authMiddleware, upload.single('midiFile'), async (req, re
             originalName: req.file.originalname,
             size: req.file.size,
             // Теперь бэкенд найдет твой ID, как бы он ни назывался в токене:
-            uploader: req.user.id || req.user.userId || req.user._id
+            uploader: req.user.id || req.user.userId || req.user._id,
+            tags: parsedTags
         });
 
         await newMidi.save();
@@ -312,6 +323,51 @@ router.delete('/:id/comment/:commentId', authMiddleware, async (req, res) => {
     } catch (error) {
         console.error("Error deleting comment:", error);
         res.status(500).json({ message: 'Server error deleting comment' });
+    }
+});
+
+// УДАЛИТЬ СВОЙ ТРЕК (DELETE /api/midi/:id)
+router.delete('/:id', authMiddleware, async (req, res) => {
+    try {
+        const midi = await Midi.findById(req.params.id);
+        if (!midi) return res.status(404).json({ message: 'Track not found' });
+
+        // 1. Проверяем, является ли пользователь автором этого трека
+        const userId = req.user.id || req.user.userId || req.user._id;
+        if (midi.uploader.toString() !== userId.toString()) {
+            return res.status(403).json({ message: 'Authorization denied (not the author)' });
+        }
+
+        // 2. Физически удаляем файл из папки uploads
+        const filePath = path.join(__dirname, '..', 'uploads', midi.filename);
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath); // Удаляет файл с диска
+        }
+
+        // 3. Удаляем документ из базы данных MongoDB
+        await Midi.findByIdAndDelete(req.params.id);
+
+        res.json({ message: 'Track deleted successfully' });
+    } catch (error) {
+        console.error("Error deleting track:", error);
+        res.status(500).json({ message: 'Server error deleting track' });
+    }
+});
+
+// ПОИСК ТРЕКОВ ПО ТЕГУ (GET /api/midi/tag/:tag)
+router.get('/tag/:tag', async (req, res) => {
+    try {
+        const tagToSearch = req.params.tag.toLowerCase(); // Приводим к нижнему регистру для надежности
+
+        // Ищем все треки, у которых в массиве tags есть нужное слово
+        const midis = await Midi.find({ tags: tagToSearch })
+            .populate('uploader', 'username')
+            .sort({ createdAt: -1 }); // Свежие сверху
+
+        res.json(midis);
+    } catch (error) {
+        console.error("Error fetching by tag:", error);
+        res.status(500).json({ message: 'Server error fetching tags' });
     }
 });
 

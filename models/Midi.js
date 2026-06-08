@@ -23,6 +23,7 @@ const midiSchema = new mongoose.Schema({
             createdAt: { type: Date, default: Date.now }
         }
     ],
+    tags: { type: [String], default: [] },
     createdAt: { type: Date, default: Date.now }
 });
 
