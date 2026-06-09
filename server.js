@@ -15,15 +15,13 @@ const midiRoutes = require('./routes/midi');
 
 const app = express();
 
-// Настройка прокси (важно для правильной работы rate-limit на хостингах)
 app.set('trust proxy', 1);
 
-// 👇 1. СНАЧАЛА CORS И ПАРСЕРЫ
-// Это гарантия того, что ЛЮБОЙ ответ сервера (даже ошибка лимита) дойдет до React
+// 1. ПАРСЕРЫ И CORS
 app.use(cors());
 app.use(express.json());
 
-// 👇 2. ПОТОМ СЕССИИ И ПАСПОРТ (ДЛЯ ДИСКОРДА)
+// 2. СЕССИИ И ПАСПОРТ
 app.use(session({
     secret: process.env.JWT_SECRET || 'supersecretkey',
     resave: false,
@@ -32,38 +30,44 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
-// 👇 3. БЕЗОПАСНОСТЬ И ЛИМИТЫ ЗАПРОСОВ
-// Helmet добавляет защитные заголовки
-app.use(helmet());
+// 3. БЕЗОПАСНОСТЬ (HELMET)
+// Отключаем жесткую политику ресурсов, чтобы браузер не блокировал файлы миди и шрифты плеера
+app.use(helmet({
+    crossOriginResourcePolicy: false,
+}));
 
-// Глобальный лимит: максимум 100 запросов за 15 минут
-const globalLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100,
-    message: { message: 'Too many requests, please try again later.' }
-});
-app.use(globalLimiter);
+// 👇👇👇 ГЛАВНЫЙ ФИКС ЗДЕСЬ 👇👇👇
 
-// Строгий лимит для путей авторизации (от брутфорса)
-const authLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000, // 1 час
-    max: 10,
-    message: { message: 'Too many login attempts, please try again in an hour.' }
-});
-app.use('/api/auth', authLimiter);
-
-// 👇 4. ПАПКА С ФАЙЛАМИ
+// 4. СНАЧАЛА ОТДАЕМ ФАЙЛЫ (Они не расходуют лимит запросов!)
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)){
     fs.mkdirSync(uploadsDir);
 }
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// 👇 5. РОУТЫ (МАРШРУТЫ)
+// 5. И ТОЛЬКО ТЕПЕРЬ СТАВИМ ЛИМИТЫ (Только для /api)
+const globalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 минут
+    max: 200, // Лимит чисто на походы к базе данных и лайки
+    message: { message: 'Too many requests, please try again later.' }
+});
+// Применяем глобальный лимит ТОЛЬКО к маршрутам API
+app.use('/api', globalLimiter);
+
+const authLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 50, // Оставь 50 пока делаешь сайт. Потом поменяешь на 5-10
+    message: { message: 'Too many login attempts, please try again in an hour.' }
+});
+app.use('/api/auth', authLimiter);
+
+// 👆👆👆 ---------------------- 👆👆👆
+
+// 6. РОУТЫ
 app.use('/api/auth', authRoutes);
 app.use('/api/midi', midiRoutes);
 
-// 👇 6. БАЗА ДАННЫХ И ЗАПУСК
+// 7. БАЗА ДАННЫХ И ЗАПУСК
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/midipad';
 

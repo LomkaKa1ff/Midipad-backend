@@ -2,70 +2,8 @@ const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const passport = require('passport');
-const DiscordStrategy = require('passport-discord').Strategy;
 
 const router = express.Router();
-
-// --- НАСТРОЙКА СТРАТЕГИИ DISCORD ---
-passport.use(new DiscordStrategy({
-    clientID: process.env.DISCORD_CLIENT_ID,
-    clientSecret: process.env.DISCORD_CLIENT_SECRET,
-    callbackURL: process.env.DISCORD_CALLBACK_URL,
-    scope: ['identify', 'email']
-}, async (accessToken, refreshToken, profile, done) => {
-    try {
-        // 1. Ищем пользователя по email
-        let user = await User.findOne({ email: profile.email });
-
-        // 2. Если нет — регистрируем нового
-        if (!user) {
-            user = new User({
-                username: profile.username,
-                email: profile.email,
-                // Генерируем случайный пароль, так как юзер вошел через Discord
-                password: Math.random().toString(36).slice(-10) + 'A1!'
-            });
-            await user.save();
-        }
-        return done(null, user);
-    } catch (err) {
-        return done(err, null);
-    }
-}));
-
-// Технические функции для сохранения юзера в сессии
-passport.serializeUser((user, done) => done(null, user));
-passport.deserializeUser((user, done) => done(null, user));
-
-
-// --- САМИ РОУТЫ ---
-
-// 1. Сюда юзер попадает при клике на кнопку (отправляем в Дискорд)
-router.get('/discord', passport.authenticate('discord'));
-
-// 2. Сюда Дискорд возвращает юзера после успешного входа
-router.get('/discord/callback', passport.authenticate('discord', {
-    failureRedirect: 'http://localhost:3000/login'
-}), (req, res) => {
-    // Генерируем токен, как при обычном логине
-    const token = jwt.sign(
-        { id: req.user._id },
-        process.env.JWT_SECRET || 'secret123',
-        { expiresIn: '7d' }
-    );
-
-    // Подготавливаем данные юзера
-    const userData = {
-        id: req.user._id,
-        username: req.user.username,
-        email: req.user.email
-    };
-
-    // Перенаправляем обратно на фронтенд, передавая токен в URL
-    const frontendRedirectUrl = `http://localhost:3000/login?token=${token}&user=${encodeURIComponent(JSON.stringify(userData))}`;
-    res.redirect(frontendRedirectUrl);
-});
 
 router.post('/register', async (req, res) => {
     try {
