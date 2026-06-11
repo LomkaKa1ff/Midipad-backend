@@ -7,7 +7,9 @@ const DiscordStrategy = require('passport-discord').Strategy;
 
 const router = express.Router();
 
-// --- НАСТРОЙКА СТРАТЕГИИ DISCORD ---
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+// DISCORD STRATEGY SETUP
 passport.use(new DiscordStrategy({
     clientID: process.env.DISCORD_CLIENT_ID,
     clientSecret: process.env.DISCORD_CLIENT_SECRET,
@@ -15,15 +17,15 @@ passport.use(new DiscordStrategy({
     scope: ['identify', 'email']
 }, async (accessToken, refreshToken, profile, done) => {
     try {
-        // 1. Ищем пользователя по email
+        // 1. Finding user by email
         let user = await User.findOne({ email: profile.email });
 
-        // 2. Если нет — регистрируем нового
+        // 2. If not found - register new user
         if (!user) {
             user = new User({
                 username: profile.username,
                 email: profile.email,
-                // Генерируем случайный пароль, так как юзер вошел через Discord
+                // Generating a random password since the user logged in via Discord
                 password: Math.random().toString(36).slice(-10) + 'A1!'
             });
             await user.save();
@@ -34,54 +36,65 @@ passport.use(new DiscordStrategy({
     }
 }));
 
-// Технические функции для сохранения юзера в сессии
+// Technical functions to save user in session
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((user, done) => done(null, user));
 
 
-// --- САМИ РОУТЫ ---
+// AUTH ROUTES
 
-// 1. Сюда юзер попадает при клике на кнопку (отправляем в Дискорд)
+// 1. User hits this route on button click (Redirects to Discord)
 router.get('/discord', passport.authenticate('discord'));
 
-// 2. Сюда Дискорд возвращает юзера после успешного входа
-router.get('/discord/callback', passport.authenticate('discord', {
-    failureRedirect: 'http://localhost:3000/login'
-}), (req, res) => {
-    // Генерируем токен, как при обычном логине
-    const token = jwt.sign(
-        { id: req.user._id },
-        process.env.JWT_SECRET || 'secret123',
-        { expiresIn: '7d' }
-    );
+// 2. Discord returns the user here after successful login
+router.get('/discord/callback', (req, res, next) => {
+    passport.authenticate('discord', { session: false }, (err, user, info) => {
+        if (err) {
+            console.log("Discord rejected the token");
+            if (err.oauthError && err.oauthError.data) {
+                console.log(err.oauthError.data);
+            } else {
+                console.log(err);
+            }
+            return res.status(500).send("Error Discord OAuth.");
+        }
 
-    // Подготавливаем данные юзера
-    const userData = {
-        id: req.user._id,
-        username: req.user.username,
-        email: req.user.email
-    };
+        if (!user) {
+            return res.redirect(`${FRONTEND_URL}/login`);
+        }
 
-    // Перенаправляем обратно на фронтенд, передавая токен в URL
-    const frontendRedirectUrl = `http://localhost:3000/login?token=${token}&user=${encodeURIComponent(JSON.stringify(userData))}`;
-    res.redirect(frontendRedirectUrl);
+        const token = jwt.sign(
+            { id: user._id, username: user.username },
+            process.env.JWT_SECRET,
+            { expiresIn: '7d' }
+        );
+
+        const userData = {
+            id: user._id,
+            username: user.username,
+            email: user.email
+        };
+
+        const frontendRedirectUrl = `${FRONTEND_URL}/login?token=${token}&user=${encodeURIComponent(JSON.stringify(userData))}`;
+        res.redirect(frontendRedirectUrl);
+    })(req, res, next);
 });
 
 router.post('/register', async (req, res) => {
     try {
         const { username, email, password } = req.body;
 
-        // 1. Проверяем, нет ли уже такого юзера
+        // 1. Check if such a user already exists
         const existingUser = await User.findOne({ $or: [{ email }, { username }] });
         if (existingUser) {
             return res.status(400).json({ message: 'User with this email or username already exists' });
         }
 
-        // 2. Шифруем пароль
+        // 2. Password encryption
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
-        // 3. Создаем и сохраняем юзера
+        // 3. Creating and saving user
         const newUser = new User({
             username,
             email,
@@ -100,26 +113,26 @@ router.post('/login', async (req, res) => {
     try {
         const { email, password } = req.body;
 
-        // 1. Ищем юзера по email
+        // 1. Finding user by email
         const user = await User.findOne({ email });
         if (!user) {
             return res.status(400).json({ message: 'Invalid email or password' });
         }
 
-        // 2. Сравниваем пароли
+        // 2. Checking passwords
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
             return res.status(400).json({ message: 'Invalid email or password' });
         }
 
-        // 3. Создаем токен (пропуск)
+        // 3. Creating token (7 days :D)
         const token = jwt.sign(
             { id: user._id, username: user.username },
             process.env.JWT_SECRET,
-            { expiresIn: '7d' } // Токен живет 7 дней
+            { expiresIn: '7d' }
         );
 
-        // 4. Отправляем инфу на фронтенд
+        // 4. Sending information to frontend
         res.json({
             token,
             user: {

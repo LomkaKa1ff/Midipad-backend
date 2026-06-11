@@ -7,27 +7,26 @@ const fs = require('fs');
 
 const router = express.Router();
 
-// 1. Простенький Middleware для проверки токена (чтобы анонимы не грузили файлы)
+// Simple Middleware token check
 const authMiddleware = (req, res, next) => {
     const token = req.header('Authorization')?.split(' ')[1];
     if (!token) return res.status(401).json({ message: 'No token, authorization denied' });
 
     try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET); // Убедись, что ключ совпадает с тем, что в auth.js
-        req.user = decoded; // Кладем данные юзера в запрос
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        req.user = decoded;
         next();
     } catch (err) {
         res.status(400).json({ message: 'Token is not valid' });
     }
 };
 
-// 2. Настраиваем Multer (где и как сохранять файлы)
+// Multer
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, 'uploads/'); // Папка, куда будут падать файлы
+        cb(null, 'uploads/'); // Directory, where all midis are saved
     },
     filename: (req, file, cb) => {
-        // Делаем уникальное имя, чтобы файлы с одинаковым названием не перезаписали друг друга
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
         cb(null, uniqueSuffix + path.extname(file.originalname));
     }
@@ -35,10 +34,10 @@ const storage = multer.diskStorage({
 
 const upload = multer({
     storage,
-    limits: { fileSize: 1048576 } // Защита на бэкенде: макс 1 МБ
+    limits: { fileSize: 1048576 } // Limit for midis 1 MB
 });
 
-// 3. РОУТ ЗАГРУЗКИ (POST /api/midi/upload)
+// Loading route (POST /api/midi/upload)
 router.post('/upload', authMiddleware, upload.single('midiFile'), async (req, res) => {
     try {
         if (!req.file) {
@@ -54,13 +53,12 @@ router.post('/upload', authMiddleware, upload.single('midiFile'), async (req, re
             }
         }
 
-        // Создаем запись в базе данных
+        // Creating record in DB
         const newMidi = new Midi({
             title: req.body.title,
             filename: req.file.filename,
             originalName: req.file.originalname,
             size: req.file.size,
-            // Теперь бэкенд найдет твой ID, как бы он ни назывался в токене:
             uploader: req.user.id || req.user.userId || req.user._id,
             tags: parsedTags
         });
@@ -74,7 +72,7 @@ router.post('/upload', authMiddleware, upload.single('midiFile'), async (req, re
     }
 });
 
-// РОУТ ПОЛУЧЕНИЯ ТРЕКОВ (С поддержкой сортировки и ПОИСКА)
+// Route for getting track (Search and sort support)
 router.get('/', async (req, res) => {
     try {
         const { sort, search } = req.query;
@@ -82,13 +80,12 @@ router.get('/', async (req, res) => {
         let query = {};
         let sortObj = { createdAt: -1 };
 
-        // 1. ЛОГИКА ПОИСКА (Если есть параметр search, ищем по названию)
+        // Search logic
         if (search) {
-            // $regex и $options: 'i' делают поиск регистронезависимым (Mario === mario)
             query.title = { $regex: search, $options: 'i' };
         }
 
-        // 2. ЛОГИКА СОРТИРОВКИ
+        // Sort logic
         if (sort === 'popular') {
             sortObj = { downloads: -1, likes: -1 };
         }
@@ -96,7 +93,6 @@ router.get('/', async (req, res) => {
             const fourteenDaysAgo = new Date();
             fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
 
-            // Если поиск уже добавил условие по title, мы просто ДОБАВЛЯЕМ условие по дате
             query.createdAt = { $gte: fourteenDaysAgo };
             sortObj = { likes: -1, listens: -1 };
         }
@@ -112,7 +108,7 @@ router.get('/', async (req, res) => {
     }
 });
 
-// 5. РОУТ ДЛЯ СКАЧИВАНИЯ ФАЙЛА С ПРАВИЛЬНЫМ ИМЕНЕМ (GET /api/midi/download/:id)
+// Route for file downloading with his name (GET /api/midi/download/:id)
 router.get('/download/:id', async (req, res) => {
     try {
         const midi = await Midi.findById(req.params.id);
@@ -122,15 +118,15 @@ router.get('/download/:id', async (req, res) => {
 
         const filePath = path.join(__dirname, '../uploads', midi.filename);
 
-        // Берем красивое название с сайта
+        // Getting name from website
         let downloadName = midi.title;
 
-        // На всякий случай проверяем, есть ли уже расширение. Если нет — добавляем.
+        // Checking for .mid or .midi
         if (!downloadName.toLowerCase().endsWith('.mid') && !downloadName.toLowerCase().endsWith('.midi')) {
             downloadName += '.mid';
         }
 
-        // Отдаем файл с новым красивым именем
+        // Serve the file with the new formatted name
         res.download(filePath, downloadName, (err) => {
             if (err) {
                 console.error("Error downloading file:", err);
@@ -142,13 +138,13 @@ router.get('/download/:id', async (req, res) => {
     }
 });
 
-// 1. Увеличить прослушивания (вызывается в useEffect плеера)
+// 1. Increment listens (called in player's useEffect)
 router.post('/listen/:id', async (req, res) => {
     try {
         const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-        // $addToSet добавляет IP только если его нет,
-        // $inc увеличивает listens только если $addToSet реально что-то добавил
+        // $addToSet adds IP only if it's not already in the array
+        // $inc increments listens only if $addToSet actually added something
         const result = await Midi.updateOne(
             { _id: req.params.id, listenedByIps: { $ne: ip } },
             {
@@ -164,7 +160,7 @@ router.post('/listen/:id', async (req, res) => {
     }
 });
 
-// 2. Лайк (простой инкремент)
+// 2. Like toggle
 router.post('/like/:id', authMiddleware, async (req, res) => {
     try {
         const userId = (req.user.id || req.user.userId || req.user._id).toString();
@@ -174,15 +170,15 @@ router.post('/like/:id', authMiddleware, async (req, res) => {
 
         if (!midi.likedBy) midi.likedBy = [];
 
-        // СТРОГОЕ СРАВНЕНИЕ СТРОК
+        // STRICT STRING COMPARISON
         const isLiked = midi.likedBy.some(id => id.toString() === userId);
 
         if (isLiked) {
-            // Удаляем ID пользователя из массива
+            // Remove user ID from the array
             midi.likedBy = midi.likedBy.filter(id => id.toString() !== userId);
             midi.likes = Math.max(0, midi.likes - 1);
         } else {
-            // Добавляем ID пользователя
+            // Add user ID to the array
             midi.likedBy.push(userId);
             midi.likes += 1;
         }
@@ -190,21 +186,21 @@ router.post('/like/:id', authMiddleware, async (req, res) => {
         await midi.save();
         res.json({ likes: midi.likes, isLiked: !isLiked });
     } catch (err) {
-        console.error("Ошибка лайка:", err);
+        console.error("Like error:", err);
         res.status(500).json({ error: err.message });
     }
 });
 
-// 3. Увеличить скачивания
+// 3. Increment downloads
 router.post('/download-increment/:id', async (req, res) => {
     try {
-        // Получаем IP пользователя
-        // Если используешь Nginx/Heroku, нужно включить app.set('trust proxy', 1) в server.js
+        // Get user IP
+        // If using Nginx/Heroku, ensure app.set('trust proxy', 1) is enabled in server.js
         const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-        // Обновляем только если IP еще не было в списке
-        // $addToSet: добавляет элемент в массив, только если его там нет
-        // $inc: увеличивает downloads на 1, ТОЛЬКО если $addToSet реально что-то добавил
+        // Update only if IP is not already in the list
+        // $addToSet: adds element to array only if it's not there
+        // $inc: increments downloads by 1 ONLY if $addToSet actually added something
         const result = await Midi.updateOne(
             { _id: req.params.id, downloadedByIps: { $ne: ip } },
             {
@@ -213,7 +209,7 @@ router.post('/download-increment/:id', async (req, res) => {
             }
         );
 
-        // Получаем актуальное количество, чтобы вернуть на фронт
+        // Get the actual count to return to frontend
         const midi = await Midi.findById(req.params.id);
         res.json({ downloads: midi.downloads });
     } catch (err) {
@@ -221,7 +217,7 @@ router.post('/download-increment/:id', async (req, res) => {
     }
 });
 
-// 1. ПОЛУЧИТЬ ЗАГРУЖЕННЫЕ ПОЛЬЗОВАТЕЛЕМ ТРЕКИ
+// 1. GET UPLOADED TRACKS BY USER
 router.get('/profile/uploads', authMiddleware, async (req, res) => {
     try {
         const userId = req.user.id || req.user.userId || req.user._id;
@@ -236,7 +232,7 @@ router.get('/profile/uploads', authMiddleware, async (req, res) => {
     }
 });
 
-// 2. ПОЛУЧИТЬ ЛАЙКНУТЫЕ ПОЛЬЗОВАТЕЛЕМ ТРЕКИ
+// 2. GET LIKED TRACKS BY USER
 router.get('/profile/liked', authMiddleware, async (req, res) => {
     try {
         const userId = req.user.id || req.user.userId || req.user._id;
@@ -251,7 +247,7 @@ router.get('/profile/liked', authMiddleware, async (req, res) => {
     }
 });
 
-// ПОЛУЧИТЬ ОДИН ТРЕК (Для страницы шеринга)
+// GET SINGLE TRACK (For sharing page)
 router.get('/track/:id', async (req, res) => {
     try {
         const midi = await Midi.findById(req.params.id).populate('uploader', 'username');
@@ -265,7 +261,7 @@ router.get('/track/:id', async (req, res) => {
     }
 });
 
-// ДОБАВИТЬ КОММЕНТАРИЙ К ТРЕКУ
+// ADD COMMENT TO TRACK
 router.post('/:id/comment', authMiddleware, async (req, res) => {
     try {
         const { text } = req.body;
@@ -288,7 +284,7 @@ router.post('/:id/comment', authMiddleware, async (req, res) => {
         if (!midi.comments) midi.comments = [];
         midi.comments.push(newComment);
 
-        await midi.save(); // Теперь Mongoose не вырежет комментарий!
+        await midi.save(); // Now Mongoose won't strip the comment!
 
         res.status(201).json(midi);
     } catch (error) {
@@ -297,28 +293,28 @@ router.post('/:id/comment', authMiddleware, async (req, res) => {
     }
 });
 
-// УДАЛИТЬ СВОЙ КОММЕНТАРИЙ (DELETE /api/midi/:id/comment/:commentId)
+// DELETE OWN COMMENT (DELETE /api/midi/:id/comment/:commentId)
 router.delete('/:id/comment/:commentId', authMiddleware, async (req, res) => {
     try {
         const midi = await Midi.findById(req.params.id);
         if (!midi) return res.status(404).json({ message: 'Track not found' });
 
-        // Находим индекс комментария в массиве
+        // Find comment index in the array
         const commentIndex = midi.comments.findIndex(c => c._id.toString() === req.params.commentId);
 
         if (commentIndex === -1) return res.status(404).json({ message: 'Comment not found' });
 
-        // Проверяем, является ли пользователь автором комментария
+        // Check if user is the author of the comment
         const userId = req.user.id || req.user.userId || req.user._id;
         if (midi.comments[commentIndex].userId.toString() !== userId.toString()) {
             return res.status(403).json({ message: 'Authorization denied (not the author)' });
         }
 
-        // Удаляем комментарий из массива с помощью splice
+        // Remove comment from array using splice
         midi.comments.splice(commentIndex, 1);
         await midi.save();
 
-        // Возвращаем измененный трек
+        // Return the updated track
         res.json(midi);
     } catch (error) {
         console.error("Error deleting comment:", error);
@@ -326,25 +322,25 @@ router.delete('/:id/comment/:commentId', authMiddleware, async (req, res) => {
     }
 });
 
-// УДАЛИТЬ СВОЙ ТРЕК (DELETE /api/midi/:id)
+// DELETE OWN TRACK (DELETE /api/midi/:id)
 router.delete('/:id', authMiddleware, async (req, res) => {
     try {
         const midi = await Midi.findById(req.params.id);
         if (!midi) return res.status(404).json({ message: 'Track not found' });
 
-        // 1. Проверяем, является ли пользователь автором этого трека
+        // 1. Check if user is the author of this track
         const userId = req.user.id || req.user.userId || req.user._id;
         if (midi.uploader.toString() !== userId.toString()) {
             return res.status(403).json({ message: 'Authorization denied (not the author)' });
         }
 
-        // 2. Физически удаляем файл из папки uploads
+        // 2. Physically delete the file from uploads directory
         const filePath = path.join(__dirname, '..', 'uploads', midi.filename);
         if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath); // Удаляет файл с диска
+            fs.unlinkSync(filePath); // Removes file from disk
         }
 
-        // 3. Удаляем документ из базы данных MongoDB
+        // 3. Delete document from MongoDB database
         await Midi.findByIdAndDelete(req.params.id);
 
         res.json({ message: 'Track deleted successfully' });
@@ -354,15 +350,15 @@ router.delete('/:id', authMiddleware, async (req, res) => {
     }
 });
 
-// ПОИСК ТРЕКОВ ПО ТЕГУ (GET /api/midi/tag/:tag)
+// SEARCH TRACKS BY TAG (GET /api/midi/tag/:tag)
 router.get('/tag/:tag', async (req, res) => {
     try {
-        const tagToSearch = req.params.tag.toLowerCase(); // Приводим к нижнему регистру для надежности
+        const tagToSearch = req.params.tag.toLowerCase(); // Convert to lowercase for reliability
 
-        // Ищем все треки, у которых в массиве tags есть нужное слово
+        // Find all tracks that have the exact word in their tags array
         const midis = await Midi.find({ tags: tagToSearch })
             .populate('uploader', 'username')
-            .sort({ createdAt: -1 }); // Свежие сверху
+            .sort({ createdAt: -1 }); // Newest on top
 
         res.json(midis);
     } catch (error) {
