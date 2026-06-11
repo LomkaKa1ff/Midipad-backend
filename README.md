@@ -22,7 +22,7 @@ Before you begin, ensure you have met the following requirements:
 
 1. **Clone the repository:**
    ```bash
-   git clone [https://github.com/ТВОЙ_НИК/midipad-backend.git](https://github.com/ТВОЙ_НИК/midipad-backend.git)
+   git clone https://github.com/LomkaKa1ff/Midipad-backend.git
    cd midipad-backend
 
 2. **Install dependencies:**
