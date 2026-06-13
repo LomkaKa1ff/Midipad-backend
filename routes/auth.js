@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Midi = require('../models/Midi');
 const passport = require('passport');
 const DiscordStrategy = require('passport-discord').Strategy;
 
@@ -144,6 +145,45 @@ router.post('/login', async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server error during login' });
+    }
+});
+
+// Get user profile
+router.get('/user/:id', async (req, res) => {
+    try {
+        // Finding user
+        const user = await User.findById(req.params.id).select('username avatar createdAt');
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        res.json(user);
+    } catch (error) {
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// Get downloaded tracks of a specific user (Downloads tab)
+router.get('/author/:userId', async (req, res) => {
+    try {
+        const midis = await Midi.find({ uploader: req.params.userId })
+            .populate('uploader', 'username createdAt')
+            .sort({ createdAt: -1 });
+        res.json(midis);
+    } catch (error) {
+        console.error("Error while getting author midis:", error);
+        res.status(500).json({ message: 'Error while loading author midis' });
+    }
+});
+
+// Get tracks that the user liked (Liked tab)
+router.get('/liked-by/:userId', async (req, res) => {
+    try {
+        const midis = await Midi.find({ likedBy: req.params.userId })
+            .populate('uploader', 'username createdAt')
+            .sort({ createdAt: -1 });
+        res.json(midis);
+    } catch (error) {
+        console.error("Error getting liked midi:", error);
+        res.status(500).json({ message: 'Error loading liked tracks' });
     }
 });
 

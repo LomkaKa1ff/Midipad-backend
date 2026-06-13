@@ -24,6 +24,7 @@ const midiSchema = new mongoose.Schema({
         }
     ],
     tags: { type: [String], default: [] },
+    coverImage: { type: String, default: null },
     createdAt: { type: Date, default: Date.now }
 });
 

@@ -17,14 +17,23 @@ const authMiddleware = (req, res, next) => {
         req.user = decoded;
         next();
     } catch (err) {
-        res.status(400).json({ message: 'Token is not valid' });
+        return res.status(401).json({ message: 'Token is not valid' });
     }
 };
+
+const coversDir = path.join(__dirname, '../uploads/covers');
+if (!fs.existsSync(coversDir)) {
+    fs.mkdirSync(coversDir, { recursive: true });
+}
 
 // Multer
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, 'uploads/'); // Directory, where all midis are saved
+        if (file.fieldname === 'coverImage') {
+            cb(null, 'uploads/covers/');
+        } else {
+            cb(null, 'uploads/');
+        }
     },
     filename: (req, file, cb) => {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -34,13 +43,18 @@ const storage = multer.diskStorage({
 
 const upload = multer({
     storage,
-    limits: { fileSize: 1048576 } // Limit for midis 1 MB
+    limits: { fileSize: 2097152 }
 });
 
 // Loading route (POST /api/midi/upload)
-router.post('/upload', authMiddleware, upload.single('midiFile'), async (req, res) => {
+router.post('/upload', authMiddleware, upload.fields([
+    { name: 'midiFile', maxCount: 1 },
+    { name: 'coverImage', maxCount: 1 }
+]), async (req, res) => {
     try {
-        if (!req.file) {
+        const midiFile = req.files && req.files['midiFile'] ? req.files['midiFile'][0] : null;
+
+        if (!midiFile) {
             return res.status(400).json({ message: 'No file uploaded' });
         }
 
@@ -53,14 +67,23 @@ router.post('/upload', authMiddleware, upload.single('midiFile'), async (req, re
             }
         }
 
-        // Creating record in DB
+        let finalCover = null;
+        const coverFile = req.files && req.files['coverImage'] ? req.files['coverImage'][0] : null;
+
+        if (coverFile) {
+            finalCover = `/uploads/covers/${coverFile.filename}`;
+        } else if (req.body.coverUrl) {
+            finalCover = req.body.coverUrl;
+        }
+
         const newMidi = new Midi({
             title: req.body.title,
-            filename: req.file.filename,
-            originalName: req.file.originalname,
-            size: req.file.size,
+            filename: midiFile.filename,
+            originalName: midiFile.originalname,
+            size: midiFile.size,
             uploader: req.user.id || req.user.userId || req.user._id,
-            tags: parsedTags
+            tags: parsedTags,
+            coverImage: finalCover
         });
 
         await newMidi.save();
@@ -340,6 +363,14 @@ router.delete('/:id', authMiddleware, async (req, res) => {
             fs.unlinkSync(filePath); // Removes file from disk
         }
 
+        // ОПЦИОНАЛЬНО: удаляем картинку обложки, если она есть и это файл (а не url)
+        if (midi.coverImage && midi.coverImage.startsWith('/uploads/covers/')) {
+            const coverPath = path.join(__dirname, '..', midi.coverImage);
+            if (fs.existsSync(coverPath)) {
+                fs.unlinkSync(coverPath);
+            }
+        }
+
         // 3. Delete document from MongoDB database
         await Midi.findByIdAndDelete(req.params.id);
 
@@ -364,6 +395,97 @@ router.get('/tag/:tag', async (req, res) => {
     } catch (error) {
         console.error("Error fetching by tag:", error);
         res.status(500).json({ message: 'Server error fetching tags' });
+    }
+});
+
+// Get downloaded tracks of a specific user (Downloads tab)
+router.get('/author/:userId', async (req, res) => {
+    try {
+        const midis = await Midi.find({ uploader: req.params.userId })
+            .populate('uploader', 'username createdAt')
+            .sort({ createdAt: -1 });
+        res.json(midis);
+    } catch (error) {
+        console.error("Error getting authors midis:", error);
+        res.status(500).json({ message: 'Error loading authors midis'});
+    }
+});
+
+// Get tracks that the user liked (Liked tab)
+router.get('/liked-by/:userId', async (req, res) => {
+    try {
+        const midis = await Midi.find({ likedBy: req.params.userId })
+            .populate('uploader', 'username createdAt')
+            .sort({ createdAt: -1 });
+        res.json(midis);
+    } catch (error) {
+        console.error("Error getting liked midis:", error);
+        res.status(500).json({ message: 'Error loading liked midis' });
+    }
+});
+
+// EDIT OWN TRACK (PUT /api/midi/:id)
+router.put('/:id', authMiddleware, upload.fields([
+    { name: 'coverImage', maxCount: 1 }
+]), async (req, res) => {
+    try {
+        const midi = await Midi.findById(req.params.id);
+        if (!midi) return res.status(404).json({ message: 'Track not found' });
+
+        // Проверяем, является ли пользователь автором этого трека
+        const userId = req.user.id || req.user.userId || req.user._id;
+        if (midi.uploader.toString() !== userId.toString()) {
+            return res.status(403).json({ message: 'Authorization denied (not the author)' });
+        }
+
+        // 1. Обновляем название (если передано)
+        if (req.body.title) {
+            if (req.body.title.trim().length > 50) {
+                return res.status(400).json({ message: 'Title too long (max 50 chars)' });
+            }
+            midi.title = req.body.title.trim();
+        }
+
+        // 2. Обновляем теги (если переданы)
+        if (req.body.tags) {
+            try {
+                midi.tags = JSON.parse(req.body.tags);
+            } catch (e) {
+                console.error("Error parsing tags during edit:", e);
+            }
+        }
+
+        // 3. Обновляем обложку
+        const coverFile = req.files && req.files['coverImage'] ? req.files['coverImage'][0] : null;
+
+        if (coverFile) {
+            // Если загружен новый файл, удаляем старую локальную обложку с диска, чтобы очистить память
+            if (midi.coverImage && midi.coverImage.startsWith('/uploads/covers/')) {
+                const oldCoverPath = path.join(__dirname, '..', midi.coverImage);
+                if (fs.existsSync(oldCoverPath)) {
+                    fs.unlinkSync(oldCoverPath);
+                }
+            }
+            midi.coverImage = `/uploads/covers/${coverFile.filename}`;
+        } else if (req.body.coverUrl !== undefined) {
+            // Если отправлена текстовая ссылка или пустая строка (удалить обложку)
+            if (req.body.coverUrl === '') {
+                // Удаляем старый файл, если он был
+                if (midi.coverImage && midi.coverImage.startsWith('/uploads/covers/')) {
+                    const oldCoverPath = path.join(__dirname, '..', midi.coverImage);
+                    if (fs.existsSync(oldCoverPath)) fs.unlinkSync(oldCoverPath);
+                }
+                midi.coverImage = null; // сбрасываем в базе
+            } else {
+                midi.coverImage = req.body.coverUrl;
+            }
+        }
+
+        await midi.save();
+        res.json({ message: 'Track updated successfully', midi });
+    } catch (error) {
+        console.error("Error updating track:", error);
+        res.status(500).json({ message: 'Server error during track update' });
     }
 });
 
