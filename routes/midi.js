@@ -432,13 +432,11 @@ router.put('/:id', authMiddleware, upload.fields([
         const midi = await Midi.findById(req.params.id);
         if (!midi) return res.status(404).json({ message: 'Track not found' });
 
-        // Проверяем, является ли пользователь автором этого трека
         const userId = req.user.id || req.user.userId || req.user._id;
         if (midi.uploader.toString() !== userId.toString()) {
             return res.status(403).json({ message: 'Authorization denied (not the author)' });
         }
 
-        // 1. Обновляем название (если передано)
         if (req.body.title) {
             if (req.body.title.trim().length > 50) {
                 return res.status(400).json({ message: 'Title too long (max 50 chars)' });
@@ -446,7 +444,6 @@ router.put('/:id', authMiddleware, upload.fields([
             midi.title = req.body.title.trim();
         }
 
-        // 2. Обновляем теги (если переданы)
         if (req.body.tags) {
             try {
                 midi.tags = JSON.parse(req.body.tags);
@@ -455,11 +452,9 @@ router.put('/:id', authMiddleware, upload.fields([
             }
         }
 
-        // 3. Обновляем обложку
         const coverFile = req.files && req.files['coverImage'] ? req.files['coverImage'][0] : null;
 
         if (coverFile) {
-            // Если загружен новый файл, удаляем старую локальную обложку с диска, чтобы очистить память
             if (midi.coverImage && midi.coverImage.startsWith('/uploads/covers/')) {
                 const oldCoverPath = path.join(__dirname, '..', midi.coverImage);
                 if (fs.existsSync(oldCoverPath)) {
@@ -468,14 +463,12 @@ router.put('/:id', authMiddleware, upload.fields([
             }
             midi.coverImage = `/uploads/covers/${coverFile.filename}`;
         } else if (req.body.coverUrl !== undefined) {
-            // Если отправлена текстовая ссылка или пустая строка (удалить обложку)
             if (req.body.coverUrl === '') {
-                // Удаляем старый файл, если он был
                 if (midi.coverImage && midi.coverImage.startsWith('/uploads/covers/')) {
                     const oldCoverPath = path.join(__dirname, '..', midi.coverImage);
                     if (fs.existsSync(oldCoverPath)) fs.unlinkSync(oldCoverPath);
                 }
-                midi.coverImage = null; // сбрасываем в базе
+                midi.coverImage = null;
             } else {
                 midi.coverImage = req.body.coverUrl;
             }
