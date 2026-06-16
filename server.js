@@ -22,6 +22,7 @@ app.use(express.json());
 // Security (Helmet)
 app.use(helmet({
     crossOriginResourcePolicy: false,
+    contentSecurityPolicy: false,
 }));
 
 const uploadsDir = path.join(__dirname, 'uploads');
