@@ -482,4 +482,15 @@ router.put('/:id', authMiddleware, upload.fields([
     }
 });
 
+// Route for getting total tracks count
+router.get('/stats/count', async (req, res) => {
+    try {
+        const count = await Midi.countDocuments();
+        res.json({ count });
+    } catch (error) {
+        console.error("Error getting track count:", error);
+        res.status(500).json({ message: 'Error fetching count' });
+    }
+});
+
 module.exports = router;

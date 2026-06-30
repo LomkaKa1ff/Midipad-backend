@@ -83,7 +83,26 @@ router.get('/discord/callback', (req, res, next) => {
 
 router.post('/register', async (req, res) => {
     try {
-        const { username, email, password } = req.body;
+        const { username, email, password, captchaToken } = req.body;
+
+        if (!captchaToken) {
+            return res.status(400).json({ message: 'Captcha verification is required' });
+        }
+
+        const secretKey = process.env.CAPTCHA_SECRET_KEY
+        const formData = new URLSearchParams();
+        formData.append('secret', secretKey);
+        formData.append('response', captchaToken);
+
+        const cfResponse = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+            method: 'POST',
+            body: formData
+        });
+        const cfData = await cfResponse.json();
+
+        if (!cfData.success) {
+            return res.status(400).json({ message: 'Captcha verification failed. Are you a bot?' });
+        }
 
         // 1. Check if such a user already exists
         const existingUser = await User.findOne({ $or: [{ email }, { username }] });
@@ -112,7 +131,26 @@ router.post('/register', async (req, res) => {
 
 router.post('/login', async (req, res) => {
     try {
-        const { email, password } = req.body;
+        const { email, password, captchaToken } = req.body;
+
+        if (!captchaToken) {
+            return res.status(400).json({ message: 'Captcha verification is required' });
+        }
+
+        const secretKey = process.env.CAPTCHA_SECRET_KEY;
+        const formData = new URLSearchParams();
+        formData.append('secret', secretKey);
+        formData.append('response', captchaToken);
+
+        const cfResponse = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+            method: 'POST',
+            body: formData
+        });
+        const cfData = await cfResponse.json();
+
+        if (!cfData.success) {
+            return res.status(400).json({ message: 'Captcha verification failed. Are you a bot?' });
+        }
 
         // 1. Finding user by email
         const user = await User.findOne({ email });
